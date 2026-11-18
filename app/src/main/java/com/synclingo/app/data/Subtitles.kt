@@ -132,17 +132,22 @@ object Subtitles {
     }
 
     // ---------------- SRT ----------------
+    // Tolerant parser: works even when line breaks were lost (e.g. text copied out of a chatbot app),
+    // by locating "[n] hh:mm:ss,mmm --> hh:mm:ss,mmm" anywhere in the text.
+    private val SRT_TIMING = Regex(
+        """(?<![\d:,.])(?:\d+\s+)?(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})"""
+    )
+
     private fun parseSrt(text: String): Track {
-        val blocks = text.replace("\r", "").split(Regex("\n{2,}"))
+        val src = text.replace("\r", "")
+        val matches = SRT_TIMING.findAll(src).toList()
         val cues = ArrayList<Cue>()
-        for (b in blocks) {
-            val lines = b.split("\n")
-            val ti = lines.indexOfFirst { it.contains("-->") }
-            if (ti < 0) continue
-            val parts = lines[ti].split("-->")
-            val start = parseVttTime(parts[0])
-            val end = parseVttTime(parts[1].trim().split(" ")[0])
-            val t = lines.drop(ti + 1).joinToString(" ").replace(ANY_TAG, "").replace(SPACES, " ").trim()
+        for ((i, m) in matches.withIndex()) {
+            val start = parseVttTime(m.groupValues[1])
+            val end = parseVttTime(m.groupValues[2])
+            val bodyEnd = if (i + 1 < matches.size) matches[i + 1].range.first else src.length
+            val t = src.substring(m.range.last + 1, bodyEnd)
+                .replace(ANY_TAG, "").replace(SPACES, " ").trim()
                 .let { decodeEntities(it) }
             if (t.isNotEmpty()) cues.add(Cue(start, end, t, emptyList()))
         }

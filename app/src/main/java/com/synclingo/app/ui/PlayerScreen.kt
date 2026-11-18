@@ -521,7 +521,13 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                                     SubtitleTools.savePastedTranslation(Library.get(ctx, itemId) ?: item, pasted)
                                 }
                                 if (n == 0) toast("붙여넣은 내용에서 SRT 자막을 찾지 못했습니다. AI 답변 전체를 복사했는지 확인하세요.")
-                                else { toast("한국어 자막 ${n}줄을 적용했습니다"); showAi = false; showKo = true; reload++ }
+                                else {
+                                    toast(
+                                        if (n < list.size * 0.9) "${list.size}문장 중 ${n}문장만 들어 있습니다. AI가 답을 중간에 끊었을 수 있어요. \"계속\"을 요청해 나머지도 이어서 붙여넣으세요."
+                                        else "한국어 자막 ${n}문장을 적용했습니다"
+                                    )
+                                    showAi = false; showKo = true; reload++
+                                }
                             }
                         }) { Text("붙여넣기") }
                     }
