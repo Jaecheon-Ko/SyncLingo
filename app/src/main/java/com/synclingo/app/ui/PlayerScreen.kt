@@ -56,6 +56,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
+enum class LangMode(val label: String) {
+    EN("영어만"),
+    BOTH("영어+한국어"),
+    KO("한국어만"),
+}
+
 enum class PlayMode(val label: String) {
     CONTINUOUS("연속 재생"),
     REPEAT("한 문장 반복"),
@@ -125,7 +131,8 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
     var playing by remember { mutableStateOf(false) }
     var mode by rememberSaveable { mutableStateOf(PlayMode.CONTINUOUS) }
     var speed by rememberSaveable { mutableFloatStateOf(1.0f) }
-    var showKo by rememberSaveable { mutableStateOf(false) }
+    var lang by rememberSaveable { mutableStateOf(LangMode.EN) }
+    var langMenu by remember { mutableStateOf(false) }
     var blind by rememberSaveable { mutableStateOf(false) }
     var onlyStars by rememberSaveable { mutableStateOf(false) }
     var follow by remember { mutableStateOf(true) }
@@ -296,17 +303,29 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                     }
                 }
             }
-            FilterChip(
-                selected = showKo && hasKo,
-                onClick = {
-                    if (hasKo) showKo = !showKo else {
-                        toast("한국어 자막이 없습니다. 만드는 방법을 골라주세요")
-                        subMenu = true
+            Box {
+                FilterChip(
+                    selected = lang != LangMode.EN && hasKo,
+                    onClick = { langMenu = true },
+                    label = { Text(if (hasKo) lang.label else "영어만") },
+                    leadingIcon = { Icon(Icons.Default.Translate, null, Modifier.size(18.dp)) },
+                )
+                DropdownMenu(expanded = langMenu, onDismissRequest = { langMenu = false }) {
+                    LangMode.entries.forEach { m ->
+                        DropdownMenuItem(
+                            text = { Text(m.label) },
+                            leadingIcon = { if (m == lang) Icon(Icons.Default.Check, null) },
+                            onClick = {
+                                langMenu = false
+                                if (m != LangMode.EN && !hasKo) {
+                                    toast("한국어 자막이 없습니다. 만드는 방법을 골라주세요")
+                                    subMenu = true
+                                } else lang = m
+                            },
+                        )
                     }
-                },
-                label = { Text("한국어") },
-                leadingIcon = { Icon(Icons.Default.Translate, null, Modifier.size(18.dp)) },
-            )
+                }
+            }
             FilterChip(
                 selected = blind, onClick = { blind = !blind; revealed.clear() },
                 label = { Text("받아쓰기") },
@@ -336,7 +355,7 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                         SentenceRow(
                             s = s, isCur = s.index == curIdx, starred = s.startMs in bookmarks, pos = pos,
                             fontSp = FONT_SIZES[fontIdx], hidden = blind && revealed[s.index] != true,
-                            showKo = showKo,
+                            lang = if (hasKo) lang else LangMode.EN,
                             onClick = { playSentence(s.index) },
                             onLongClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -389,7 +408,7 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                                                 busyProgress = if (total > 0 && done > 0) done.toFloat() / total else -1f
                                             }
                                             toast("$n 문장을 번역했습니다")
-                                            showKo = true; reload++
+                                            lang = LangMode.BOTH; reload++
                                         } catch (e: Exception) {
                                             toast("번역 실패: ${e.message}. 인터넷 연결을 확인하세요(처음 한 번 모델 다운로드).")
                                         } finally { busy = null }
@@ -447,15 +466,24 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                                 Column(Modifier.padding(14.dp)) {
                                     Text("지금 문장", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                     Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        if (blind && revealed[cur.index] != true) maskText(cur) else cur.text,
-                                        fontSize = (FONT_SIZES[fontIdx] + 2).sp,
-                                        lineHeight = ((FONT_SIZES[fontIdx] + 2) * 1.4f).sp,
-                                        fontWeight = FontWeight.Medium,
-                                    )
-                                    cur.translation?.let {
-                                        Spacer(Modifier.height(6.dp))
-                                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = FONT_SIZES[fontIdx].sp)
+                                    val curLang = if (hasKo) lang else LangMode.EN
+                                    val koText = cur.translation
+                                    if (curLang != LangMode.KO || koText == null) {
+                                        Text(
+                                            if (blind && revealed[cur.index] != true) maskText(cur) else cur.text,
+                                            fontSize = (FONT_SIZES[fontIdx] + 2).sp,
+                                            lineHeight = ((FONT_SIZES[fontIdx] + 2) * 1.4f).sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                    if (curLang != LangMode.EN && koText != null) {
+                                        if (curLang == LangMode.BOTH) Spacer(Modifier.height(6.dp))
+                                        Text(
+                                            koText,
+                                            color = if (curLang == LangMode.KO) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = (if (curLang == LangMode.KO) FONT_SIZES[fontIdx] + 2 else FONT_SIZES[fontIdx]).sp,
+                                            lineHeight = ((FONT_SIZES[fontIdx] + 2) * 1.4f).sp,
+                                        )
                                     }
                                 }
                             }
@@ -526,7 +554,7 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                                         if (n < list.size * 0.9) "${list.size}문장 중 ${n}문장만 들어 있습니다. AI가 답을 중간에 끊었을 수 있어요. \"계속\"을 요청해 나머지도 이어서 붙여넣으세요."
                                         else "한국어 자막 ${n}문장을 적용했습니다"
                                     )
-                                    showAi = false; showKo = true; reload++
+                                    showAi = false; lang = LangMode.BOTH; reload++
                                 }
                             }
                         }) { Text("붙여넣기") }
@@ -581,7 +609,7 @@ private fun SentenceRow(
     pos: Long,
     fontSp: Int,
     hidden: Boolean,
-    showKo: Boolean,
+    lang: LangMode,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onReveal: () -> Unit,
@@ -602,7 +630,7 @@ private fun SentenceRow(
                 Icon(Icons.Default.Star, null, Modifier.size(14.dp), tint = Color(0xFFFFC107))
             }
             Spacer(Modifier.weight(1f))
-            if (hidden) {
+            if (hidden && (lang != LangMode.KO || s.translation == null)) {
                 Text(
                     "정답 보기",
                     style = MaterialTheme.typography.labelSmall,
@@ -611,27 +639,41 @@ private fun SentenceRow(
                 )
             }
         }
-        val text = when {
-            hidden -> buildAnnotatedString { append(maskText(s)) }
-            isCur && s.words.isNotEmpty() -> buildAnnotatedString {
-                s.words.forEachIndexed { i, w ->
-                    if (i > 0) append(" ")
-                    if (w.startMs <= pos) withStyle(SpanStyle(color = primary, fontWeight = FontWeight.SemiBold)) { append(w.text) }
-                    else append(w.text)
+        val koText = s.translation
+        val showEn = lang != LangMode.KO || koText == null
+        if (showEn) {
+            val text = when {
+                hidden -> buildAnnotatedString { append(maskText(s)) }
+                isCur && s.words.isNotEmpty() -> buildAnnotatedString {
+                    s.words.forEachIndexed { i, w ->
+                        if (i > 0) append(" ")
+                        if (w.startMs <= pos) withStyle(SpanStyle(color = primary, fontWeight = FontWeight.SemiBold)) { append(w.text) }
+                        else append(w.text)
+                    }
                 }
+                else -> buildAnnotatedString { append(s.text) }
             }
-            else -> buildAnnotatedString { append(s.text) }
+            Text(
+                text,
+                fontSize = fontSp.sp,
+                lineHeight = (fontSp * 1.35f).sp,
+                fontWeight = if (isCur) FontWeight.Medium else FontWeight.Normal,
+                letterSpacing = if (hidden) 1.sp else 0.sp,
+            )
         }
-        Text(
-            text,
-            fontSize = fontSp.sp,
-            lineHeight = (fontSp * 1.35f).sp,
-            fontWeight = if (isCur) FontWeight.Medium else FontWeight.Normal,
-            letterSpacing = if (hidden) 1.sp else 0.sp,
-        )
-        if (showKo && s.translation != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(s.translation, fontSize = (fontSp - 3).sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (lang != LangMode.EN && koText != null) {
+            if (lang == LangMode.BOTH) {
+                Spacer(Modifier.height(2.dp))
+                Text(koText, fontSize = (fontSp - 3).sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    koText,
+                    fontSize = fontSp.sp,
+                    lineHeight = (fontSp * 1.4f).sp,
+                    fontWeight = if (isCur) FontWeight.Medium else FontWeight.Normal,
+                    color = if (isCur) primary else MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
     }
 }
