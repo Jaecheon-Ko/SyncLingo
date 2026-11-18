@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+
+      - name: Build release APKs
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Collect APKs
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*arm64-v8a*.apk out/SyncLingo-arm64.apk
+          cp app/build/outputs/apk/release/*armeabi-v7a*.apk out/SyncLingo-armv7.apk
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SyncLingo-apk
+          path: out/*.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: SyncLingo 1.0.${{ github.run_number }}
+          make_latest: true
+          files: out/*.apk
+          body: |
+            ## 설치
+            - 대부분의 최신 폰: **SyncLingo-arm64.apk**
+            - 아주 오래된 폰(32비트): SyncLingo-armv7.apk
+
+            폰 브라우저에서 위 파일을 눌러 받은 뒤 설치하세요.
+            처음 한 번은 "출처를 알 수 없는 앱 설치"를 허용해야 합니다.
