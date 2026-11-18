@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -164,6 +166,176 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
         }
     }
 
+    var bigVideo by rememberSaveable { mutableStateOf(false) }
+
+    // ---------------- building blocks ----------------
+
+    val videoView: @Composable (Modifier) -> Unit = { m ->
+        AndroidView(
+            factory = { c ->
+                PlayerView(c).apply {
+                    this.player = player
+                    keepScreenOn = true
+                    setShowNextButton(false)
+                    setShowPreviousButton(false)
+                    if (item.isAudioOnly) {
+                        setControllerShowTimeoutMs(0)
+                        setControllerHideOnTouch(false)
+                        item.thumb?.let { f ->
+                            BitmapFactory.decodeFile(f.absolutePath)?.let { bmp ->
+                                setDefaultArtwork(BitmapDrawable(c.resources, bmp))
+                            }
+                        }
+                        setArtworkDisplayMode(PlayerView.ARTWORK_DISPLAY_MODE_FIT)
+                    }
+                }
+            },
+            onRelease = { it.player = null },
+            modifier = m.aspectRatio(16f / 9f).background(Color.Black),
+        )
+    }
+
+    val playPause = {
+        if (player.isPlaying) player.pause() else {
+            lockIdx = curIdx
+            player.play()
+        }
+    }
+
+    val transport: @Composable (Modifier, Boolean) -> Unit = { m, grid ->
+        if (grid) {
+            // compact 2x2 grid beside a small video (folded phone)
+            Column(m, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                FilledIconButton(onClick = playPause, modifier = Modifier.size(48.dp)) {
+                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "재생", Modifier.size(28.dp))
+                }
+                Row {
+                    IconButton(onClick = { playSentence((curIdx - 1).coerceAtLeast(0)) }) { Icon(Icons.Default.SkipPrevious, "이전 문장") }
+                    IconButton(onClick = { playSentence(curIdx.coerceAtLeast(0)) }) { Icon(Icons.Default.Replay, "다시") }
+                    IconButton(onClick = { playSentence(curIdx + 1) }) { Icon(Icons.Default.SkipNext, "다음 문장") }
+                }
+                Text(formatTime(pos), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            Row(
+                m.padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { playSentence((curIdx - 1).coerceAtLeast(0)) }) { Icon(Icons.Default.SkipPrevious, "이전 문장") }
+                IconButton(onClick = { playSentence(curIdx.coerceAtLeast(0)) }) { Icon(Icons.Default.Replay, "현재 문장 다시") }
+                FilledIconButton(onClick = playPause, modifier = Modifier.size(52.dp)) {
+                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "재생", Modifier.size(30.dp))
+                }
+                IconButton(onClick = { playSentence(curIdx + 1) }) { Icon(Icons.Default.SkipNext, "다음 문장") }
+                Text(formatTime(pos), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    val chips: @Composable (Boolean) -> Unit = { showSizeToggle ->
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (showSizeToggle) {
+                FilterChip(
+                    selected = bigVideo, onClick = { bigVideo = !bigVideo },
+                    label = { Text(if (bigVideo) "영상 크게" else "영상 작게") },
+                    leadingIcon = { Icon(if (bigVideo) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, null, Modifier.size(18.dp)) },
+                )
+            }
+            Box {
+                AssistChip(
+                    onClick = { modeMenu = true },
+                    label = { Text(mode.label) },
+                    leadingIcon = {
+                        Icon(
+                            when (mode) {
+                                PlayMode.CONTINUOUS -> Icons.Default.PlaylistPlay
+                                PlayMode.REPEAT -> Icons.Default.RepeatOne
+                                PlayMode.PAUSE -> Icons.Default.PauseCircleOutline
+                            }, null, Modifier.size(18.dp)
+                        )
+                    },
+                )
+                DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                    PlayMode.entries.forEach { m ->
+                        DropdownMenuItem(text = { Text(m.label) }, onClick = {
+                            mode = m; lockIdx = curIdx; modeMenu = false
+                        })
+                    }
+                }
+            }
+            Box {
+                AssistChip(
+                    onClick = { speedMenu = true },
+                    label = { Text("${"%.2f".format(speed).trimEnd('0').trimEnd('.')}x") },
+                    leadingIcon = { Icon(Icons.Default.Speed, null, Modifier.size(18.dp)) },
+                )
+                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                    SPEEDS.forEach { s ->
+                        DropdownMenuItem(text = { Text("${s}x") }, onClick = { speed = s; speedMenu = false })
+                    }
+                }
+            }
+            FilterChip(
+                selected = showKo, enabled = hasKo, onClick = { showKo = !showKo },
+                label = { Text("한국어") },
+                leadingIcon = { Icon(Icons.Default.Translate, null, Modifier.size(18.dp)) },
+            )
+            FilterChip(
+                selected = blind, onClick = { blind = !blind; revealed.clear() },
+                label = { Text("받아쓰기") },
+                leadingIcon = { Icon(Icons.Default.Hearing, null, Modifier.size(18.dp)) },
+            )
+            FilterChip(
+                selected = onlyStars, onClick = { onlyStars = !onlyStars },
+                label = { Text("★ ${bookmarks.size}") },
+            )
+        }
+    }
+
+    val transcript: @Composable (Modifier) -> Unit = { m ->
+        Box(m) {
+            when {
+                sentences == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                list.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("이 영상에는 영어 자막이 없습니다.\n'내 파일 가져오기'로 자막 파일을 직접 넣을 수 있습니다.", color = MaterialTheme.colorScheme.outline)
+                }
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(visible, key = { it.index }) { s ->
+                        SentenceRow(
+                            s = s, isCur = s.index == curIdx, starred = s.startMs in bookmarks, pos = pos,
+                            fontSp = FONT_SIZES[fontIdx], hidden = blind && revealed[s.index] != true,
+                            showKo = showKo,
+                            onClick = { playSentence(s.index) },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                bookmarks = if (s.startMs in bookmarks) bookmarks - s.startMs else bookmarks + s.startMs
+                                Library.saveBookmarks(item, bookmarks)
+                            },
+                            onReveal = { revealed[s.index] = true },
+                        )
+                    }
+                }
+            }
+            if (!follow && !onlyStars && list.isNotEmpty()) {
+                SmallFloatingActionButton(
+                    onClick = { follow = true },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                ) { Icon(Icons.Default.MyLocation, "현재 문장으로") }
+            }
+        }
+    }
+
+    // ---------------- layout ----------------
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -172,202 +344,129 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                 actions = {
                     IconButton(onClick = { fontIdx = (fontIdx + 1) % FONT_SIZES.size }) { Icon(Icons.Default.FormatSize, "글자 크기") }
                 },
+                windowInsets = TopAppBarDefaults.windowInsets,
+                expandedHeight = 52.dp,
             )
-        },
-        floatingActionButton = {
-            if (!follow && !onlyStars && list.isNotEmpty()) {
-                ExtendedFloatingActionButton(
-                    onClick = { follow = true },
-                    icon = { Icon(Icons.Default.MyLocation, null) },
-                    text = { Text("현재 문장") },
-                )
-            }
         },
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            // ---------- video ----------
-            AndroidView(
-                factory = { c ->
-                    PlayerView(c).apply {
-                        this.player = player
-                        keepScreenOn = true
-                        setShowNextButton(false)
-                        setShowPreviousButton(false)
-                        if (item.isAudioOnly) {
-                            setControllerShowTimeoutMs(0)
-                            setControllerHideOnTouch(false)
-                            item.thumb?.let { f ->
-                                BitmapFactory.decodeFile(f.absolutePath)?.let { bmp ->
-                                    setDefaultArtwork(BitmapDrawable(c.resources, bmp))
-                                }
-                            }
-                            setArtworkDisplayMode(PlayerView.ARTWORK_DISPLAY_MODE_FIT)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(androidx.compose.ui.graphics.Color.Black),
-            )
-
-            // ---------- learning controls ----------
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = { playSentence((curIdx - 1).coerceAtLeast(0)) }) { Icon(Icons.Default.SkipPrevious, "이전 문장") }
-                IconButton(onClick = { playSentence(curIdx.coerceAtLeast(0)) }) { Icon(Icons.Default.Replay, "현재 문장 다시") }
-                FilledIconButton(onClick = {
-                    if (player.isPlaying) player.pause() else {
-                        lockIdx = curIdx
-                        player.play()
-                    }
-                }, modifier = Modifier.size(52.dp)) {
-                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "재생", Modifier.size(30.dp))
-                }
-                IconButton(onClick = { playSentence(curIdx + 1) }) { Icon(Icons.Default.SkipNext, "다음 문장") }
-                Text(
-                    formatTime(pos),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box {
-                    AssistChip(
-                        onClick = { modeMenu = true },
-                        label = { Text(mode.label) },
-                        leadingIcon = {
-                            Icon(
-                                when (mode) {
-                                    PlayMode.CONTINUOUS -> Icons.Default.PlaylistPlay
-                                    PlayMode.REPEAT -> Icons.Default.RepeatOne
-                                    PlayMode.PAUSE -> Icons.Default.PauseCircleOutline
-                                }, null, Modifier.size(18.dp)
-                            )
-                        },
-                    )
-                    DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                        PlayMode.entries.forEach { m ->
-                            DropdownMenuItem(text = { Text(m.label) }, onClick = {
-                                mode = m; lockIdx = curIdx; modeMenu = false
-                            })
-                        }
-                    }
-                }
-                Box {
-                    AssistChip(
-                        onClick = { speedMenu = true },
-                        label = { Text("${"%.2f".format(speed).trimEnd('0').trimEnd('.')}x") },
-                        leadingIcon = { Icon(Icons.Default.Speed, null, Modifier.size(18.dp)) },
-                    )
-                    DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                        SPEEDS.forEach { s ->
-                            DropdownMenuItem(text = { Text("${s}x") }, onClick = { speed = s; speedMenu = false })
-                        }
-                    }
-                }
-                FilterChip(
-                    selected = showKo, enabled = hasKo, onClick = { showKo = !showKo },
-                    label = { Text("한국어") },
-                    leadingIcon = { Icon(Icons.Default.Translate, null, Modifier.size(18.dp)) },
-                )
-                FilterChip(
-                    selected = blind, onClick = { blind = !blind; revealed.clear() },
-                    label = { Text("받아쓰기") },
-                    leadingIcon = { Icon(Icons.Default.Hearing, null, Modifier.size(18.dp)) },
-                )
-                FilterChip(
-                    selected = onlyStars, onClick = { onlyStars = !onlyStars },
-                    label = { Text("★ ${bookmarks.size}") },
-                )
-            }
-
-            // ---------- transcript ----------
-            when {
-                sentences == null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                list.isEmpty() -> Box(Modifier.fillMaxWidth().weight(1f).padding(24.dp), contentAlignment = Alignment.Center) {
-                    Text("이 영상에는 영어 자막이 없습니다.\n'내 파일 가져오기'로 자막 파일을 직접 넣을 수 있습니다.", color = MaterialTheme.colorScheme.outline)
-                }
-                else -> LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(visible, key = { it.index }) { s ->
-                        val isCur = s.index == curIdx
-                        val starred = s.startMs in bookmarks
-                        val primary = MaterialTheme.colorScheme.primary
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isCur) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface)
-                                .combinedClickable(
-                                    onClick = { playSentence(s.index) },
-                                    onLongClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        bookmarks = if (starred) bookmarks - s.startMs else bookmarks + s.startMs
-                                        Library.saveBookmarks(item, bookmarks)
-                                    },
-                                )
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(formatTime(s.startMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                                if (starred) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Icon(Icons.Default.Star, null, Modifier.size(14.dp), tint = androidx.compose.ui.graphics.Color(0xFFFFC107))
-                                }
-                                Spacer(Modifier.weight(1f))
-                                if (blind && revealed[s.index] != true) {
+        BoxWithConstraints(Modifier.padding(pad).fillMaxSize()) {
+            val wide = maxWidth >= 600.dp
+            if (wide) {
+                // Unfolded / landscape: video + controls on the left, transcript on the right
+                Row(Modifier.fillMaxSize()) {
+                    Column(
+                        Modifier.weight(0.55f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                    ) {
+                        videoView(Modifier.fillMaxWidth())
+                        transport(Modifier.fillMaxWidth(), false)
+                        chips(false)
+                        val cur = list.getOrNull(curIdx)
+                        if (cur != null) {
+                            Card(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Column(Modifier.padding(14.dp)) {
+                                    Text("지금 문장", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "정답 보기",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = primary,
-                                        modifier = Modifier.clip(RoundedCornerShape(4.dp))
-                                            .combinedClickable(onClick = { revealed[s.index] = true })
-                                            .padding(4.dp),
+                                        if (blind && revealed[cur.index] != true) maskText(cur) else cur.text,
+                                        fontSize = (FONT_SIZES[fontIdx] + 2).sp,
+                                        lineHeight = ((FONT_SIZES[fontIdx] + 2) * 1.4f).sp,
+                                        fontWeight = FontWeight.Medium,
                                     )
-                                }
-                            }
-                            val fs = FONT_SIZES[fontIdx].sp
-                            val hidden = blind && revealed[s.index] != true
-                            val text = when {
-                                hidden -> buildAnnotatedString {
-                                    append(s.words.joinToString(" ") { w -> w.text.map { if (it.isLetterOrDigit()) '_' else it }.joinToString("") })
-                                }
-                                isCur && s.words.isNotEmpty() -> buildAnnotatedString {
-                                    s.words.forEachIndexed { i, w ->
-                                        if (i > 0) append(" ")
-                                        if (w.startMs <= pos) withStyle(SpanStyle(color = primary, fontWeight = FontWeight.SemiBold)) { append(w.text) }
-                                        else append(w.text)
+                                    cur.translation?.let {
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = FONT_SIZES[fontIdx].sp)
                                     }
                                 }
-                                else -> buildAnnotatedString { append(s.text) }
-                            }
-                            Text(
-                                text,
-                                fontSize = fs,
-                                lineHeight = (FONT_SIZES[fontIdx] * 1.4f).sp,
-                                fontWeight = if (isCur) FontWeight.Medium else FontWeight.Normal,
-                                letterSpacing = if (hidden) 1.sp else 0.sp,
-                            )
-                            if (showKo && s.translation != null) {
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    s.translation,
-                                    fontSize = (FONT_SIZES[fontIdx] - 3).sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
                             }
                         }
                     }
+                    VerticalDivider()
+                    transcript(Modifier.weight(0.45f).fillMaxHeight())
+                }
+            } else {
+                // Folded / narrow: compact video, transcript gets most of the screen
+                Column(Modifier.fillMaxSize()) {
+                    if (bigVideo) {
+                        videoView(Modifier.fillMaxWidth())
+                        transport(Modifier.fillMaxWidth(), false)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            videoView(Modifier.weight(0.6f))
+                            transport(Modifier.weight(0.4f), true)
+                        }
+                    }
+                    chips(true)
+                    HorizontalDivider(Modifier.padding(top = 4.dp))
+                    transcript(Modifier.fillMaxWidth().weight(1f))
                 }
             }
+        }
+    }
+}
+
+private fun maskText(s: Sentence) =
+    s.words.joinToString(" ") { w -> w.text.map { if (it.isLetterOrDigit()) '_' else it }.joinToString("") }
+
+@kotlin.OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SentenceRow(
+    s: Sentence,
+    isCur: Boolean,
+    starred: Boolean,
+    pos: Long,
+    fontSp: Int,
+    hidden: Boolean,
+    showKo: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onReveal: () -> Unit,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isCur) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(formatTime(s.startMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            if (starred) {
+                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Default.Star, null, Modifier.size(14.dp), tint = Color(0xFFFFC107))
+            }
+            Spacer(Modifier.weight(1f))
+            if (hidden) {
+                Text(
+                    "정답 보기",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = primary,
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).combinedClickable(onClick = onReveal).padding(4.dp),
+                )
+            }
+        }
+        val text = when {
+            hidden -> buildAnnotatedString { append(maskText(s)) }
+            isCur && s.words.isNotEmpty() -> buildAnnotatedString {
+                s.words.forEachIndexed { i, w ->
+                    if (i > 0) append(" ")
+                    if (w.startMs <= pos) withStyle(SpanStyle(color = primary, fontWeight = FontWeight.SemiBold)) { append(w.text) }
+                    else append(w.text)
+                }
+            }
+            else -> buildAnnotatedString { append(s.text) }
+        }
+        Text(
+            text,
+            fontSize = fontSp.sp,
+            lineHeight = (fontSp * 1.35f).sp,
+            fontWeight = if (isCur) FontWeight.Medium else FontWeight.Normal,
+            letterSpacing = if (hidden) 1.sp else 0.sp,
+        )
+        if (showKo && s.translation != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(s.translation, fontSize = (fontSp - 3).sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
