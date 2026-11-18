@@ -56,7 +56,15 @@ object Library {
         val subs = files.filter { it.extension.lowercase() in SUB_EXT }
         val enSubs = subs.filter { it.name.startsWith("sub.") }
         val subtitle = pickSubtitle(enSubs.ifEmpty { subs.filter { !it.name.startsWith("ko.") } })
-        val translation = pickSubtitle(subs.filter { it.name.startsWith("ko.") })
+        val translation = subs.filter { it.name.startsWith("ko.") && !it.name.contains(".tmp.") }
+            .minByOrNull {
+                when {
+                    it.name.startsWith("ko.ai.") -> 0 // pasted AI translation
+                    it.name.startsWith("ko.mt.") -> 3 // on-device machine translation
+                    it.extension.lowercase() == "json3" -> 2 // YouTube auto-translate
+                    else -> 1 // user-imported file
+                }
+            }
         val meta = File(dir, "meta.json").takeIf { it.exists() }?.let {
             try { JSONObject(it.readText()) } catch (e: Exception) { null }
         } ?: JSONObject()

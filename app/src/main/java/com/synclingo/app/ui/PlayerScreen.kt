@@ -15,6 +15,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.Color
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.synclingo.app.data.Downloader
+import com.synclingo.app.data.SubtitleTools
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -99,7 +105,18 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
     }
 
     var sentences by remember { mutableStateOf<List<Sentence>?>(null) }
-    LaunchedEffect(itemId) { sentences = withContext(Dispatchers.IO) { loadSentences(item) } }
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(itemId, reload) {
+        sentences = withContext(Dispatchers.IO) { loadSentences(Library.get(ctx, itemId) ?: item) }
+    }
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    var subMenu by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf<String?>(null) }
+    var busyProgress by remember { mutableFloatStateOf(-1f) }
+    var showAi by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+    fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
     val list = sentences ?: emptyList()
     val hasKo = list.any { it.translation != null }
 
@@ -280,7 +297,13 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                 }
             }
             FilterChip(
-                selected = showKo, enabled = hasKo, onClick = { showKo = !showKo },
+                selected = showKo && hasKo,
+                onClick = {
+                    if (hasKo) showKo = !showKo else {
+                        toast("한국어 자막이 없습니다. 만드는 방법을 골라주세요")
+                        subMenu = true
+                    }
+                },
                 label = { Text("한국어") },
                 leadingIcon = { Icon(Icons.Default.Translate, null, Modifier.size(18.dp)) },
             )
@@ -343,6 +366,64 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                 title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
                 actions = {
                     IconButton(onClick = { fontIdx = (fontIdx + 1) % FONT_SIZES.size }) { Icon(Icons.Default.FormatSize, "글자 크기") }
+                    Box {
+                        IconButton(onClick = { subMenu = true }) { Icon(Icons.Default.Subtitles, "자막 메뉴") }
+                        DropdownMenu(expanded = subMenu, onDismissRequest = { subMenu = false }) {
+                            Text(
+                                "한글 번역 만들기", style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("폰에서 바로 번역 (무료·오프라인)") },
+                                leadingIcon = { Icon(Icons.Default.Translate, null) },
+                                enabled = list.isNotEmpty(),
+                                onClick = {
+                                    subMenu = false
+                                    busy = "번역 준비 중"; busyProgress = -1f
+                                    scope.launch {
+                                        try {
+                                            val cur = Library.get(ctx, itemId) ?: item
+                                            val n = SubtitleTools.machineTranslate(cur, list) { done, total, stage ->
+                                                busy = "$stage $done/$total"
+                                                busyProgress = if (total > 0 && done > 0) done.toFloat() / total else -1f
+                                            }
+                                            toast("$n 문장을 번역했습니다")
+                                            showKo = true; reload++
+                                        } catch (e: Exception) {
+                                            toast("번역 실패: ${e.message}. 인터넷 연결을 확인하세요(처음 한 번 모델 다운로드).")
+                                        } finally { busy = null }
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("AI로 번역 (ChatGPT·Claude 등)") },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, null) },
+                                enabled = list.isNotEmpty(),
+                                onClick = { subMenu = false; showAi = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("유튜브 번역 자막 다시 받기") },
+                                leadingIcon = { Icon(Icons.Default.Refresh, null) },
+                                onClick = {
+                                    subMenu = false
+                                    busy = "유튜브에서 한국어 자막 받는 중"; busyProgress = -1f
+                                    scope.launch {
+                                        val r = Downloader.fetchTranslation(ctx, Library.get(ctx, itemId) ?: item)
+                                        busy = null
+                                        toast(r); reload++
+                                    }
+                                },
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("자막 파일 내보내기") },
+                                leadingIcon = { Icon(Icons.Default.IosShare, null) },
+                                enabled = list.isNotEmpty(),
+                                onClick = { subMenu = false; showExport = true },
+                            )
+                        }
+                    }
                 },
                 windowInsets = TopAppBarDefaults.windowInsets,
                 expandedHeight = 52.dp,
@@ -401,6 +482,84 @@ fun PlayerScreen(itemId: String, onBack: () -> Unit) {
                 }
             }
         }
+    }
+    busy?.let { msg ->
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            title = { Text(msg, style = MaterialTheme.typography.titleMedium) },
+            text = {
+                if (busyProgress >= 0f) LinearProgressIndicator(progress = { busyProgress }, modifier = Modifier.fillMaxWidth())
+                else LinearProgressIndicator(Modifier.fillMaxWidth())
+            },
+        )
+    }
+
+    if (showAi) {
+        AlertDialog(
+            onDismissRequest = { showAi = false },
+            title = { Text("AI로 자연스럽게 번역하기") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("① 아래 [복사]를 누르면 번역 요청문과 영어 자막이 함께 복사됩니다.", style = MaterialTheme.typography.bodyMedium)
+                    Text("② ChatGPT·Claude·Gemini 앱에 붙여넣고 보냅니다.", style = MaterialTheme.typography.bodyMedium)
+                    Text("③ 답변 전체를 복사한 뒤 돌아와서 [붙여넣기]를 누릅니다.", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "영상이 길면 AI가 중간에 끊을 수 있습니다. 그럴 땐 \"계속\"이라고 보낸 뒤 모든 답을 이어서 복사하세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            clipboard.setText(AnnotatedString(SubtitleTools.aiPrompt(list)))
+                            toast("복사했습니다 (${list.size}문장). AI 앱에 붙여넣으세요")
+                        }) { Text("복사") }
+                        OutlinedButton(onClick = {
+                            val pasted = clipboard.getText()?.text.orEmpty()
+                            scope.launch {
+                                val n = withContext(Dispatchers.IO) {
+                                    SubtitleTools.savePastedTranslation(Library.get(ctx, itemId) ?: item, pasted)
+                                }
+                                if (n == 0) toast("붙여넣은 내용에서 SRT 자막을 찾지 못했습니다. AI 답변 전체를 복사했는지 확인하세요.")
+                                else { toast("한국어 자막 ${n}줄을 적용했습니다"); showAi = false; showKo = true; reload++ }
+                            }
+                        }) { Text("붙여넣기") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAi = false }) { Text("닫기") } },
+        )
+    }
+
+    if (showExport) {
+        AlertDialog(
+            onDismissRequest = { showExport = false },
+            title = { Text("자막 파일 내보내기") },
+            text = {
+                Text(
+                    "영어" + (if (hasKo) ", 한국어, 영어+한국어(이중)" else "") + " 자막을 .srt 파일로 만듭니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExport = false
+                    try { SubtitleTools.share(ctx, Library.get(ctx, itemId) ?: item, list) }
+                    catch (e: Exception) { toast("공유 실패: ${e.message}") }
+                }) { Text("공유하기") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showExport = false
+                    scope.launch {
+                        val r = withContext(Dispatchers.IO) {
+                            runCatching { SubtitleTools.saveToDownloads(ctx, Library.get(ctx, itemId) ?: item, list) }
+                        }
+                        toast(r.getOrElse { "저장 실패: ${it.message}" })
+                    }
+                }) { Text("다운로드 폴더에 저장") }
+            },
+        )
     }
 }
 

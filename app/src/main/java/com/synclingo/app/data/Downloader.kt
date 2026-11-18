@@ -251,6 +251,36 @@ object Downloader {
         Library.notifyChanged()
     }
 
+    /** Retry fetching YouTube's Korean auto-translated subtitles for an existing item. */
+    suspend fun fetchTranslation(ctx: Context, item: LibraryItem): String = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (item.id.startsWith("local_")) return@withContext "내 파일로 가져온 영상은 유튜브 번역을 받을 수 없습니다"
+        if (Engine.state.value != Engine.State.READY) return@withContext "다운로드 엔진이 아직 준비되지 않았습니다"
+        val before = item.dir.listFiles()?.count { it.name.startsWith("ko.ko.") } ?: 0
+        val url = item.url.ifBlank { "https://www.youtube.com/watch?v=${item.id}" }
+        val msg = try {
+            val req = YoutubeDLRequest(url).apply {
+                addOption("--skip-download")
+                addOption("--write-subs")
+                addOption("--write-auto-subs")
+                addOption("--sub-langs", "ko")
+                addOption("--sub-format", "json3/vtt/best")
+                addOption("-o", "subtitle:" + File(item.dir, "ko.%(ext)s").absolutePath)
+                addOption("--no-playlist")
+            }
+            YoutubeDL.getInstance().execute(req, item.id + "-ko-retry", false, null)
+            null
+        } catch (e: Throwable) {
+            e.message ?: e.toString()
+        }
+        val after = item.dir.listFiles()?.count { it.name.startsWith("ko.ko.") } ?: 0
+        when {
+            after > before || after > 0 -> { Library.notifyChanged(); "한국어 번역 자막을 받았습니다" }
+            msg != null && msg.contains("429") -> "유튜브가 요청을 막았습니다(429). 몇 시간 뒤 다시 시도하거나 '폰에서 번역'을 쓰세요."
+            msg != null -> "받지 못했습니다: " + msg.lines().firstOrNull { it.contains("ERROR") }.orEmpty().take(200)
+            else -> "이 영상은 유튜브 한국어 번역이 제공되지 않습니다. '폰에서 번역'을 쓰세요."
+        }
+    }
+
     fun cancel(id: String) {
         YoutubeDL.getInstance().destroyProcessById(id)
     }
